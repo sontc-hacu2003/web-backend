@@ -1,14 +1,17 @@
 package backend.web.core.config.database;
 
-import com.zaxxer.hikari.HikariDataSource;
+import javax.sql.DataSource;
+
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Primary;
 
-import javax.sql.DataSource;
+import com.zaxxer.hikari.HikariDataSource;
 
 @Configuration
+@ConditionalOnProperty(name = "backend.postgresdb.enabled", havingValue = "true")
 public class PostgresDatabase extends Database {
     public static final String DRIVER_CLASS_NAME = "org.postgresql.Driver";
 
