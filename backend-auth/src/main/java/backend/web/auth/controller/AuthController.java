@@ -1,6 +1,7 @@
 package backend.web.auth.controller;
 
 import backend.web.auth.service.AuthService;
+import backend.web.core.model.request.auth.ResetPasswordRequest;
 import backend.web.core.model.request.auth.SigninRequest;
 import backend.web.core.model.request.auth.SignupRequest;
 
@@ -30,6 +31,12 @@ public class AuthController {
     @PostMapping("/signin")
     public ResponseEntity<BaseResponse> signin(@RequestBody SigninRequest request) {
         var response = authService.signin(request);
+        return ResponseEntity.ok(response);
+    }
+
+    @PostMapping("/reset-password")
+    public ResponseEntity<BaseResponse> resetPassword(@RequestBody ResetPasswordRequest request) {
+        var response = authService.resetPassword(request);
         return ResponseEntity.ok(response);
     }
 }

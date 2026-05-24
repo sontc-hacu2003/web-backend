@@ -22,6 +22,7 @@ import java.util.*;
 import backend.web.core.helper.PasswordHash;
 import backend.web.core.repository.auth.CmsFunctionRepository;
 import backend.web.core.repository.auth.CmsUserRepository;
+import backend.web.core.model.request.auth.ResetPasswordRequest;
 import backend.web.core.model.request.auth.SigninRequest;
 import backend.web.core.model.request.auth.SignupRequest;
 import backend.web.core.model.response.base.BaseResponse;
@@ -87,10 +88,10 @@ public class AuthService {
             var response = validateSigninRequest(request);
             if (!response.getCode().equals(BaseResponse.Success)) return response;
 
-            var email = request.getEmail().trim().toLowerCase();
-            var user = userRepository.findByEmailIgnoreCase(email).orElse(null);
+            var login = getSigninLogin(request);
+            var user = findUserByLogin(login);
             if (user == null || !new PasswordHash().verify(request.getPassword(), user.getPasswordHash())) {
-                return BaseResponse.errorResponse("Invalid email or password");
+                return BaseResponse.errorResponse("Invalid username/email or password");
             }
 
             if (!"1".equals(user.getStatus())) {
@@ -115,11 +116,33 @@ public class AuthService {
                     .sorted(Comparator.comparing(CmsFunction::getFuncOrder, Comparator.nullsLast(Long::compareTo)))
                     .map(x -> new CmsFunctionDto(x, AuthHelper.getChildrenFunction(x, allFunctions)))
                     .toList();
-
+            LogUtils.info("User logged in successfully: " + user.getUsername());
             return BaseResponse.successResponse(new LoginResponse(userData, token, functions));
         } catch (Exception e) {
             LogUtils.error(e.getMessage(), e);
             return BaseResponse.errorResponse("Login failed");
+        }
+    }
+
+    @Transactional
+    public BaseResponse resetPassword(ResetPasswordRequest request) {
+        try {
+            var response = validateResetPasswordRequest(request);
+            if (!response.getCode().equals(BaseResponse.Success)) return response;
+
+            var user = findUserByLogin(request.getLogin());
+            if (user == null) {
+                return BaseResponse.errorResponse("User not found");
+            }
+
+            user.setPasswordHash(new PasswordHash().hash(request.getNewPassword()));
+            user.setUpdatedAt(LocalDateTime.now());
+            userRepository.save(user);
+
+            return BaseResponse.successResponse("Password reset successful");
+        } catch (Exception e) {
+            LogUtils.error(e.getMessage(), e);
+            return BaseResponse.errorResponse("Password reset failed");
         }
     }
 
@@ -139,17 +162,48 @@ public class AuthService {
         return BaseResponse.successResponse();
     }
 
+    private BaseResponse validateResetPasswordRequest(ResetPasswordRequest request) {
+        if (request == null) {
+            return BaseResponse.errorResponse("Request body is required");
+        }
+        if (!StringUtils.hasText(request.getLogin())) {
+            return BaseResponse.errorResponse("Email or username is required");
+        }
+        if (!StringUtils.hasText(request.getNewPassword()) || request.getNewPassword().length() < 8) {
+            return BaseResponse.errorResponse("Password must be at least 8 characters");
+        }
+        return BaseResponse.successResponse();
+    }
+
     private BaseResponse validateSigninRequest(SigninRequest request) {
         if (request == null) {
             return BaseResponse.errorResponse("Request body is required");
         }
-        if (!StringUtils.hasText(request.getEmail())) {
-            return BaseResponse.errorResponse("Email is required");
+        if (!StringUtils.hasText(getSigninLogin(request))) {
+            return BaseResponse.errorResponse("Email or username is required");
         }
         if (!StringUtils.hasText(request.getPassword())) {
             return BaseResponse.errorResponse("Password is required");
         }
         return BaseResponse.successResponse();
+    }
+
+    private String getSigninLogin(SigninRequest request) {
+        if (request == null) {
+            return null;
+        }
+
+        return StringUtils.hasText(request.getLogin()) ? request.getLogin().trim() : request.getEmail();
+    }
+
+    private CmsUser findUserByLogin(String login) {
+        var normalizedLogin = login.trim().toLowerCase();
+
+        if (normalizedLogin.contains("@")) {
+            return userRepository.findByEmailIgnoreCase(normalizedLogin).orElse(null);
+        }
+
+        return userRepository.findByUsernameIgnoreCase(normalizedLogin).orElse(null);
     }
 
     private String generateJwtToken(CmsUser user) throws Exception {

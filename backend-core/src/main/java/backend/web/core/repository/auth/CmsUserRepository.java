@@ -12,4 +12,6 @@ public interface CmsUserRepository extends JpaRepository<CmsUser, Long> {
     boolean existsByEmailIgnoreCase(String email);
 
     Optional<CmsUser> findByEmailIgnoreCase(String email);
+
+    Optional<CmsUser> findByUsernameIgnoreCase(String username);
 }

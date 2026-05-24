@@ -2,6 +2,7 @@ package backend.web.core.filter;
 
 import backend.web.core.model.request.base.EncryptedRequest;
 import backend.web.core.service.MiddlewareCryptoService;
+import backend.web.core.utility.LogUtils;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
@@ -24,7 +25,7 @@ import java.util.Arrays;
 import java.util.List;
 
 @Component
-@Order(Ordered.HIGHEST_PRECEDENCE)
+@Order(Ordered.HIGHEST_PRECEDENCE + 1)
 public class MiddlewareEncryptionFilter extends OncePerRequestFilter {
     private final ObjectMapper objectMapper;
     private final MiddlewareCryptoService cryptoService;
@@ -35,8 +36,8 @@ public class MiddlewareEncryptionFilter extends OncePerRequestFilter {
     public MiddlewareEncryptionFilter(
             ObjectMapper objectMapper,
             MiddlewareCryptoService cryptoService,
-            @Value("${app.middleware.encryption.enabled:true}") boolean enabled,
-            @Value("${app.middleware.encryption.excluded-paths:/auth/public-key,/login,/register,/error}") String excludedPaths) {
+            @Value("${app.middleware.encryption.enabled}") boolean enabled,
+            @Value("${app.middleware.encryption.excluded-paths}") String excludedPaths) {
         this.objectMapper = objectMapper;
         this.cryptoService = cryptoService;
         this.enabled = enabled;
@@ -48,25 +49,46 @@ public class MiddlewareEncryptionFilter extends OncePerRequestFilter {
 
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
-        return !enabled || "OPTIONS".equalsIgnoreCase(request.getMethod()) || isExcludedPath(request);
+        return false;
     }
 
     @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain filterChain)
             throws ServletException, IOException {
-        var parsedRequest = readEncryptedRequest(request);
-        if (parsedRequest.encryptedRequest() == null) {
-            filterChain.doFilter(new CachedBodyHttpServletRequest(request, parsedRequest.body()), response);
-            return;
+        var startTime = System.currentTimeMillis();
+        var encrypted = false;
+        var excluded = !enabled || "OPTIONS".equalsIgnoreCase(request.getMethod()) || isExcludedPath(request);
+        LogUtils.info(String.format("request started [method - %s] [query - %s] [contentType - %s] [excluded - %s]",
+                request.getMethod(), request.getQueryString(), request.getContentType(), excluded));
+
+        try {
+            if (excluded) {
+                filterChain.doFilter(request, response);
+                return;
+            }
+
+            var parsedRequest = readEncryptedRequest(request);
+            if (parsedRequest.encryptedRequest() == null) {
+                filterChain.doFilter(new CachedBodyHttpServletRequest(request, parsedRequest.body()), response);
+                return;
+            }
+
+            encrypted = true;
+            var encryptedRequest = parsedRequest.encryptedRequest();
+            var decryptedBody = cryptoService.decrypt(encryptedRequest);
+            var decryptedRequest = new CachedBodyHttpServletRequest(request, decryptedBody);
+            var wrappedResponse = new ContentCachingResponseWrapper(response);
+
+            filterChain.doFilter(decryptedRequest, wrappedResponse);
+            writeEncryptedResponse(wrappedResponse, encryptedRequest.p());
+        } catch (Exception e) {
+            LogUtils.error(String.format("request failed [method - %s] [status - %s] [encrypted - %s]",
+                    request.getMethod(), response.getStatus(), encrypted), e);
+            throw e;
+        } finally {
+            LogUtils.info(String.format("request completed [method - %s] [status - %s] [encrypted - %s] [durationMs - %s]",
+                    request.getMethod(), response.getStatus(), encrypted, System.currentTimeMillis() - startTime));
         }
-
-        var encryptedRequest = parsedRequest.encryptedRequest();
-        var decryptedBody = cryptoService.decrypt(encryptedRequest);
-        var decryptedRequest = new CachedBodyHttpServletRequest(request, decryptedBody);
-        var wrappedResponse = new ContentCachingResponseWrapper(response);
-
-        filterChain.doFilter(decryptedRequest, wrappedResponse);
-        writeEncryptedResponse(wrappedResponse, encryptedRequest.p());
     }
 
     private ParsedEncryptedRequest readEncryptedRequest(HttpServletRequest request) throws IOException {
