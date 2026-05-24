@@ -2,11 +2,14 @@ package backend.web.core.filter;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+
 import org.apache.logging.log4j.ThreadContext;
+import org.slf4j.MDC;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
@@ -17,9 +20,12 @@ import org.springframework.web.filter.OncePerRequestFilter;
 
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
+
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.security.InvalidKeyException;
 import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.time.Clock;
 import java.util.Arrays;
 import java.util.Base64;
@@ -46,10 +52,10 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
     public JwtAuthenticationFilter(
             ObjectMapper objectMapper,
             @Value("${app.security.jwt.secret}") String jwtSecret,
-            @Value("${app.security.jwt.excluded-paths:/auth/**,/login,/register,/error}") String[] excludedPaths) {
+            @Value("${app.security.jwt.excluded-paths}") String excludedPaths) {
         this.objectMapper = objectMapper;
         this.jwtSecret = jwtSecret;
-        this.excludedPaths = Arrays.stream(excludedPaths)
+        this.excludedPaths = Arrays.stream(excludedPaths.split(","))
                 .map(String::trim)
                 .filter(StringUtils::hasText)
                 .toList();
@@ -91,6 +97,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             if (subject instanceof String userName && StringUtils.hasText(userName)) {
                 request.setAttribute(JWT_SUBJECT_ATTRIBUTE, userName);
                 ThreadContext.put("userName", userName);
+                MDC.put("userName", userName);
             }
             request.setAttribute(JWT_CLAIMS_ATTRIBUTE, claims);
             filterChain.doFilter(request, response);
@@ -98,6 +105,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             writeUnauthorizedResponse(response, e.getMessage());
         } finally {
             ThreadContext.remove("userName");
+            MDC.remove("userName");
         }
     }
 
@@ -145,7 +153,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             }
         } catch (IllegalArgumentException e) {
             throw e;
-        } catch (Exception e) {
+        } catch (IllegalStateException | InvalidKeyException | NoSuchAlgorithmException e) {
             throw new IllegalArgumentException("Token signature verification failed");
         }
     }

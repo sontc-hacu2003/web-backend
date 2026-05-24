@@ -14,7 +14,7 @@ import lombok.Setter;
 @Getter
 @Setter
 @Entity
-@Table(name = "CMS_ROLE")
+@Table(name = "cms_role")
 public class CmsRole {
 
     @Id

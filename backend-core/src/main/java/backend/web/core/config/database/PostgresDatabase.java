@@ -4,14 +4,18 @@ import javax.sql.DataSource;
 
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.boot.persistence.autoconfigure.EntityScan;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Primary;
+import org.springframework.data.jpa.repository.config.EnableJpaRepositories;
 
 import com.zaxxer.hikari.HikariDataSource;
 
 @Configuration
 @ConditionalOnProperty(name = "backend.postgresdb.enabled", havingValue = "true")
+@EntityScan(basePackages = "backend.web.core.model.entity")
+@EnableJpaRepositories(basePackages = "backend.web.core.repository")
 public class PostgresDatabase extends Database {
     public static final String DRIVER_CLASS_NAME = "org.postgresql.Driver";
 
