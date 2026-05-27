@@ -27,6 +27,8 @@ import java.util.List;
 @Component
 @Order(Ordered.HIGHEST_PRECEDENCE + 1)
 public class MiddlewareEncryptionFilter extends OncePerRequestFilter {
+    private static final int MAX_REQUEST_BODY_BYTES = 10 * 1024 * 1024;
+
     private final ObjectMapper objectMapper;
     private final MiddlewareCryptoService cryptoService;
     private final AntPathMatcher pathMatcher = new AntPathMatcher();
@@ -49,7 +51,7 @@ public class MiddlewareEncryptionFilter extends OncePerRequestFilter {
 
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
-        return false;
+        return !enabled || "OPTIONS".equalsIgnoreCase(request.getMethod()) || isExcludedPath(request);
     }
 
     @Override
@@ -57,15 +59,8 @@ public class MiddlewareEncryptionFilter extends OncePerRequestFilter {
             throws ServletException, IOException {
         var startTime = System.currentTimeMillis();
         var encrypted = false;
-        var excluded = !enabled || "OPTIONS".equalsIgnoreCase(request.getMethod()) || isExcludedPath(request);
-        LogUtils.info(String.format("request started [method - %s] [query - %s] [contentType - %s] [excluded - %s]",
-                request.getMethod(), request.getQueryString(), request.getContentType(), excluded));
 
         try {
-            if (excluded) {
-                filterChain.doFilter(request, response);
-                return;
-            }
 
             var parsedRequest = readEncryptedRequest(request);
             if (parsedRequest.encryptedRequest() == null) {
@@ -92,6 +87,10 @@ public class MiddlewareEncryptionFilter extends OncePerRequestFilter {
     }
 
     private ParsedEncryptedRequest readEncryptedRequest(HttpServletRequest request) throws IOException {
+        if (request.getContentLengthLong() > MAX_REQUEST_BODY_BYTES) {
+            throw new IOException("Request body exceeds maximum allowed size");
+        }
+
         var body = StreamUtils.copyToString(request.getInputStream(), StandardCharsets.UTF_8);
         if (!StringUtils.hasText(body)) {
             return new ParsedEncryptedRequest(null, body);

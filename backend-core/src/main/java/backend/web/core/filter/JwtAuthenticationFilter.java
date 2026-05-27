@@ -1,20 +1,16 @@
 package backend.web.core.filter;
 
+import backend.web.core.security.JwtAuthenticationToken;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
-
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
-
 import org.apache.logging.log4j.ThreadContext;
 import org.slf4j.MDC;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpHeaders;
-import org.springframework.http.HttpStatus;
-import org.springframework.stereotype.Component;
-import org.springframework.util.AntPathMatcher;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.util.StringUtils;
 import org.springframework.web.filter.OncePerRequestFilter;
 
@@ -27,82 +23,53 @@ import java.security.InvalidKeyException;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Clock;
-import java.util.Arrays;
 import java.util.Base64;
-import java.util.HashMap;
-import java.util.List;
 import java.util.Map;
 
-@Component
 public class JwtAuthenticationFilter extends OncePerRequestFilter {
-    public static final String JWT_CLAIMS_ATTRIBUTE = "jwtClaims";
-    public static final String JWT_SUBJECT_ATTRIBUTE = "jwtSubject";
-
     private static final TypeReference<Map<String, Object>> MAP_TYPE = new TypeReference<>() {
     };
     private static final String BEARER_PREFIX = "Bearer ";
 
     private final ObjectMapper objectMapper;
-    private final AntPathMatcher pathMatcher = new AntPathMatcher();
     private final Base64.Decoder base64UrlDecoder = Base64.getUrlDecoder();
     private final Clock clock = Clock.systemUTC();
     private final String jwtSecret;
-    private final List<String> excludedPaths;
 
-    public JwtAuthenticationFilter(
-            ObjectMapper objectMapper,
-            @Value("${app.security.jwt.secret}") String jwtSecret,
-            @Value("${app.security.jwt.excluded-paths}") String excludedPaths) {
+    public JwtAuthenticationFilter(ObjectMapper objectMapper, String jwtSecret) {
         this.objectMapper = objectMapper;
         this.jwtSecret = jwtSecret;
-        this.excludedPaths = Arrays.stream(excludedPaths.split(","))
-                .map(String::trim)
-                .filter(StringUtils::hasText)
-                .toList();
     }
 
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
-        if ("OPTIONS".equalsIgnoreCase(request.getMethod())) {
-            return true;
-        }
-
-        var requestPath = request.getRequestURI();
-        var contextPath = request.getContextPath();
-        if (StringUtils.hasText(contextPath) && requestPath.startsWith(contextPath)) {
-            requestPath = requestPath.substring(contextPath.length());
-        }
-
-        for (var excludedPath : excludedPaths) {
-            if (pathMatcher.match(excludedPath, requestPath)) {
-                return true;
-            }
-        }
-        return false;
+        return "OPTIONS".equalsIgnoreCase(request.getMethod());
     }
 
     @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain filterChain)
             throws ServletException, IOException {
-        var authorizationHeader = request.getHeader(HttpHeaders.AUTHORIZATION);
-        if (!StringUtils.hasText(authorizationHeader) || !authorizationHeader.startsWith(BEARER_PREFIX)) {
-            writeUnauthorizedResponse(response, "Missing bearer token");
-            return;
+        var authHeader = request.getHeader(HttpHeaders.AUTHORIZATION);
+
+        if (StringUtils.hasText(authHeader) && authHeader.startsWith(BEARER_PREFIX)) {
+            try {
+                var token = authHeader.substring(BEARER_PREFIX.length()).trim();
+                var claims = validateToken(token);
+                var subject = claims.get("sub") instanceof String s ? s : null;
+
+                SecurityContextHolder.getContext().setAuthentication(new JwtAuthenticationToken(subject, claims));
+
+                if (StringUtils.hasText(subject)) {
+                    ThreadContext.put("userName", subject);
+                    MDC.put("userName", subject);
+                }
+            } catch (IllegalArgumentException e) {
+                SecurityContextHolder.clearContext();
+            }
         }
 
         try {
-            var token = authorizationHeader.substring(BEARER_PREFIX.length()).trim();
-            var claims = validateToken(token);
-            var subject = claims.get("sub");
-            if (subject instanceof String userName && StringUtils.hasText(userName)) {
-                request.setAttribute(JWT_SUBJECT_ATTRIBUTE, userName);
-                ThreadContext.put("userName", userName);
-                MDC.put("userName", userName);
-            }
-            request.setAttribute(JWT_CLAIMS_ATTRIBUTE, claims);
             filterChain.doFilter(request, response);
-        } catch (IllegalArgumentException e) {
-            writeUnauthorizedResponse(response, e.getMessage());
         } finally {
             ThreadContext.remove("userName");
             MDC.remove("userName");
@@ -177,17 +144,5 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             return number.longValue();
         }
         return null;
-    }
-
-    private void writeUnauthorizedResponse(HttpServletResponse response, String message) throws IOException {
-        response.setStatus(HttpStatus.UNAUTHORIZED.value());
-        response.setContentType("application/json");
-        response.setCharacterEncoding(StandardCharsets.UTF_8.name());
-
-        var responseBody = new HashMap<String, Object>();
-        responseBody.put("status", HttpStatus.UNAUTHORIZED.value());
-        responseBody.put("error", HttpStatus.UNAUTHORIZED.getReasonPhrase());
-        responseBody.put("message", message);
-        response.getWriter().write(objectMapper.writeValueAsString(responseBody));
     }
 }

@@ -1,10 +1,20 @@
 package backend.web.auth.service;
 
 import backend.web.core.helper.AuthHelper;
+import backend.web.core.helper.PasswordHash;
 import backend.web.core.model.dto.admin.CmsFunctionDto;
-import backend.web.core.model.entity.admin.CmsUser;
+import backend.web.core.model.dto.admin.CmsUserDto;
 import backend.web.core.model.entity.admin.CmsFunction;
-
+import backend.web.core.model.entity.admin.CmsUser;
+import backend.web.core.model.request.auth.ResetPasswordRequest;
+import backend.web.core.model.request.auth.SigninRequest;
+import backend.web.core.model.request.auth.SignupRequest;
+import backend.web.core.model.response.base.BaseResponse;
+import backend.web.core.model.response.user.LoginResponse;
+import backend.web.core.repository.auth.CmsFunctionRepository;
+import backend.web.core.repository.auth.CmsRoleRepository;
+import backend.web.core.repository.auth.CmsUserRepository;
+import backend.web.core.utility.LogUtils;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
@@ -19,20 +29,11 @@ import java.time.Instant;
 import java.time.LocalDateTime;
 import java.util.*;
 
-import backend.web.core.helper.PasswordHash;
-import backend.web.core.repository.auth.CmsFunctionRepository;
-import backend.web.core.repository.auth.CmsUserRepository;
-import backend.web.core.model.request.auth.ResetPasswordRequest;
-import backend.web.core.model.request.auth.SigninRequest;
-import backend.web.core.model.request.auth.SignupRequest;
-import backend.web.core.model.response.base.BaseResponse;
-import backend.web.core.model.response.user.LoginResponse;
-import backend.web.core.utility.LogUtils;
-
 @Service
 @RequiredArgsConstructor
 public class AuthService {
     private final CmsUserRepository userRepository;
+    private final CmsRoleRepository roleRepository;
     private final CmsFunctionRepository functionRepository;
     private final ObjectMapper objectMapper;
 
@@ -45,155 +46,108 @@ public class AuthService {
     @Transactional
     public BaseResponse signup(SignupRequest request) {
         try {
-            var response = validateSignupRequest(request);
-            if (!response.getCode().equals(BaseResponse.Success)) return response;
-
             var username = request.getUsername().trim();
             var email = request.getEmail().trim().toLowerCase();
 
             if (userRepository.existsByUsernameIgnoreCase(username)) {
-                return BaseResponse.errorResponse("Username already exists");
+                return BaseResponse.errorResponse("Username đã tồn tại");
             }
-
             if (userRepository.existsByEmailIgnoreCase(email)) {
-                return BaseResponse.errorResponse("Email already exists");
+                return BaseResponse.errorResponse("Email đã tồn tại");
             }
 
             var now = LocalDateTime.now();
             var user = new CmsUser();
             user.setUsername(username);
             user.setEmail(email);
-            user.setPasswordHash(new PasswordHash().hash(request.getPassword()));
+            user.setPasswordHash(PasswordHash.hash(request.getPassword()));
             user.setFullName(username);
             user.setStatus("1");
             user.setIsChange(0);
             user.setUuid(UUID.randomUUID().toString());
             user.setCreatedAt(now);
             user.setUpdatedAt(now);
-            var result = userRepository.save(user);
-            if (result.getId() != null) {
-                return BaseResponse.successResponse();
-            }
-            return BaseResponse.errorResponse("Failed to create user");
-        }
-        catch (Exception e) {
-            LogUtils.error(e);
-            return BaseResponse.errorResponse("Failed to create user");
+
+            userRepository.save(user);
+            LogUtils.info("User registered: " + username);
+            return BaseResponse.successResponse();
+        } catch (Exception e) {
+            LogUtils.error("Signup failed", e);
+            return BaseResponse.serverError();
         }
     }
 
     @Transactional
     public BaseResponse signin(SigninRequest request) {
         try {
-            var response = validateSigninRequest(request);
-            if (!response.getCode().equals(BaseResponse.Success)) return response;
+            var login = resolveLogin(request);
+            if (!StringUtils.hasText(login)) {
+                return BaseResponse.errorResponse("Email hoặc username là bắt buộc");
+            }
 
-            var login = getSigninLogin(request);
             var user = findUserByLogin(login);
-            if (user == null || !new PasswordHash().verify(request.getPassword(), user.getPasswordHash())) {
-                return BaseResponse.errorResponse("Invalid username/email or password");
+            if (user == null || !PasswordHash.verify(request.getPassword(), user.getPasswordHash())) {
+                return BaseResponse.errorResponse("Sai username/email hoặc mật khẩu");
             }
 
             if (!"1".equals(user.getStatus())) {
-                return BaseResponse.errorResponse("Account is inactive");
+                return BaseResponse.errorResponse("Tài khoản đã bị khoá");
             }
 
             user.setLastLoginAt(LocalDateTime.now());
             userRepository.save(user);
 
             var token = generateJwtToken(user);
-            var userData = new HashMap<String, Object>();
-            userData.put("id", user.getId());
-            userData.put("username", user.getUsername());
-            userData.put("email", user.getEmail());
-            userData.put("fullName", user.getFullName());
-            userData.put("roleId", user.getRoleId());
-
-            var isAdmin = "1".equalsIgnoreCase(String.valueOf(user.getRoleId()));
-            var allFunctions = isAdmin ? functionRepository.findAll() : functionRepository.findByRoleId(user.getRoleId());
+            var isAdmin = isAdminRole(user.getRoleId());
+            var allFunctions = isAdmin ? functionRepository.findAll()
+                    : functionRepository.findByRoleId(user.getRoleId());
             var functions = allFunctions.stream()
                     .filter(x -> Objects.equals(x.getFuncLevel(), 1L))
                     .sorted(Comparator.comparing(CmsFunction::getFuncOrder, Comparator.nullsLast(Long::compareTo)))
                     .map(x -> new CmsFunctionDto(x, AuthHelper.getChildrenFunction(x, allFunctions)))
                     .toList();
-            LogUtils.info("User logged in successfully: " + user.getUsername());
-            return BaseResponse.successResponse(new LoginResponse(userData, token, functions));
+
+            LogUtils.info("User logged in: " + user.getUsername());
+            return BaseResponse.successResponse(new LoginResponse(CmsUserDto.from(user), token, functions));
         } catch (Exception e) {
-            LogUtils.error(e.getMessage(), e);
-            return BaseResponse.errorResponse("Login failed");
+            LogUtils.error("Signin failed", e);
+            return BaseResponse.serverError();
         }
     }
 
     @Transactional
     public BaseResponse resetPassword(ResetPasswordRequest request) {
         try {
-            var response = validateResetPasswordRequest(request);
-            if (!response.getCode().equals(BaseResponse.Success)) return response;
-
             var user = findUserByLogin(request.getLogin());
-            if (user == null) {
-                return BaseResponse.errorResponse("User not found");
+            if (user == null || !PasswordHash.verify(request.getOldPassword(), user.getPasswordHash())) {
+                return BaseResponse.errorResponse("Sai thông tin đăng nhập hoặc mật khẩu cũ");
             }
 
-            user.setPasswordHash(new PasswordHash().hash(request.getNewPassword()));
+            user.setPasswordHash(PasswordHash.hash(request.getNewPassword()));
             user.setUpdatedAt(LocalDateTime.now());
             userRepository.save(user);
 
-            return BaseResponse.successResponse("Password reset successful");
+            LogUtils.info("Password reset for: " + user.getUsername());
+            return BaseResponse.successResponse("Đổi mật khẩu thành công");
         } catch (Exception e) {
-            LogUtils.error(e.getMessage(), e);
-            return BaseResponse.errorResponse("Password reset failed");
+            LogUtils.error("Reset password failed", e);
+            return BaseResponse.serverError();
         }
     }
 
-    private BaseResponse validateSignupRequest(SignupRequest request) {
-        if (request == null) {
-            return BaseResponse.errorResponse("Request body is required");
-        }
-        if (!StringUtils.hasText(request.getUsername())) {
-            return BaseResponse.errorResponse("Username is required");
-        }
-        if (!StringUtils.hasText(request.getEmail())) {
-            return BaseResponse.errorResponse("Email is required");
-        }
-        if (!StringUtils.hasText(request.getPassword()) || request.getPassword().length() < 8) {
-            return BaseResponse.errorResponse("Password must be at least 8 characters");
-        }
-        return BaseResponse.successResponse();
+    private boolean isAdminRole(Long roleId) {
+        if (roleId == null)
+            return false;
+        return roleRepository.findById(roleId)
+                .map(role -> Boolean.TRUE.equals(role.getIsAdmin()))
+                .orElse(false);
     }
 
-    private BaseResponse validateResetPasswordRequest(ResetPasswordRequest request) {
-        if (request == null) {
-            return BaseResponse.errorResponse("Request body is required");
+    private String resolveLogin(SigninRequest request) {
+        if (StringUtils.hasText(request.getLogin())) {
+            return request.getLogin().trim();
         }
-        if (!StringUtils.hasText(request.getLogin())) {
-            return BaseResponse.errorResponse("Email or username is required");
-        }
-        if (!StringUtils.hasText(request.getNewPassword()) || request.getNewPassword().length() < 8) {
-            return BaseResponse.errorResponse("Password must be at least 8 characters");
-        }
-        return BaseResponse.successResponse();
-    }
-
-    private BaseResponse validateSigninRequest(SigninRequest request) {
-        if (request == null) {
-            return BaseResponse.errorResponse("Request body is required");
-        }
-        if (!StringUtils.hasText(getSigninLogin(request))) {
-            return BaseResponse.errorResponse("Email or username is required");
-        }
-        if (!StringUtils.hasText(request.getPassword())) {
-            return BaseResponse.errorResponse("Password is required");
-        }
-        return BaseResponse.successResponse();
-    }
-
-    private String getSigninLogin(SigninRequest request) {
-        if (request == null) {
-            return null;
-        }
-
-        return StringUtils.hasText(request.getLogin()) ? request.getLogin().trim() : request.getEmail();
+        return StringUtils.hasText(request.getEmail()) ? request.getEmail().trim() : null;
     }
 
     private CmsUser findUserByLogin(String login) {
@@ -202,7 +156,6 @@ public class AuthService {
         if (normalizedLogin.contains("@")) {
             return userRepository.findByEmailIgnoreCase(normalizedLogin).orElse(null);
         }
-
         return userRepository.findByUsernameIgnoreCase(normalizedLogin).orElse(null);
     }
 
@@ -214,8 +167,7 @@ public class AuthService {
                 "userId", user.getId(),
                 "email", user.getEmail(),
                 "iat", now.getEpochSecond(),
-                "exp", now.plusSeconds(jwtExpirationSeconds).getEpochSecond()
-        );
+                "exp", now.plusSeconds(jwtExpirationSeconds).getEpochSecond());
         var encodedHeader = base64UrlEncode(objectMapper.writeValueAsBytes(header));
         var encodedClaims = base64UrlEncode(objectMapper.writeValueAsBytes(claims));
         var signedContent = encodedHeader + "." + encodedClaims;

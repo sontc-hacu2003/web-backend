@@ -1,4 +1,4 @@
-package backend.web.core.response.base;
+package backend.web.core.model.response.base;
 
 import java.util.function.Supplier;
 import java.util.stream.Stream;

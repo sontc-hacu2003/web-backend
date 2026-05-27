@@ -1,4 +1,4 @@
-package backend.web.core.response.base;
+package backend.web.core.model.response.base;
 
 public record BasePagingResponse(Object listData, Long totalData) {
 }

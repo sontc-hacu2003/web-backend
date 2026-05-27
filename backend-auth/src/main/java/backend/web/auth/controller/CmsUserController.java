@@ -5,6 +5,7 @@ import backend.web.core.annotation.RequireFunction;
 import backend.web.core.model.request.admin.CreateUserRequest;
 import backend.web.core.model.request.admin.UpdateUserRequest;
 import backend.web.core.model.response.base.BaseResponse;
+import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -32,7 +33,7 @@ public class CmsUserController {
 
     @PostMapping
     @RequireFunction("ADMIN_USER_CREATE")
-    public ResponseEntity<BaseResponse> createUser(@RequestBody CreateUserRequest request) {
+    public ResponseEntity<BaseResponse> createUser(@Valid @RequestBody CreateUserRequest request) {
         return ResponseEntity.ok(cmsUserService.createUser(request));
     }
 

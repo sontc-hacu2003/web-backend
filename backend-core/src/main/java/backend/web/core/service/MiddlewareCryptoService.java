@@ -19,10 +19,10 @@ import javax.crypto.KeyAgreement;
 import javax.crypto.spec.GCMParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
 
+import backend.web.core.model.response.base.BaseEncryptedResponse;
 import org.springframework.stereotype.Service;
 
 import backend.web.core.model.request.base.EncryptedRequest;
-import backend.web.core.response.base.BaseEncryptedResponse;
 
 @Service
 public class MiddlewareCryptoService {
@@ -40,6 +40,8 @@ public class MiddlewareCryptoService {
     private final SecureRandom secureRandom = new SecureRandom();
     private final KeyPair serverKeyPair;
 
+    // TODO: In production with multiple instances, load key pair from config/vault/HSM
+    //       instead of generating new keys on each startup to avoid decrypt failures
     public MiddlewareCryptoService() {
         try {
             var generator = KeyPairGenerator.getInstance(EC_ALGORITHM);
@@ -83,6 +85,8 @@ public class MiddlewareCryptoService {
         }
     }
 
+    // P-256 ECDH produces a 32-byte shared secret matching AES-256 key size.
+    // Compatible with Web Crypto API's deriveKey() which also uses the raw ECDH secret.
     private SecretKeySpec deriveAesKey(String clientPublicKey) throws Exception {
         var agreement = KeyAgreement.getInstance(ECDH_ALGORITHM);
         agreement.init(serverKeyPair.getPrivate());
